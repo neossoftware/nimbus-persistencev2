@@ -34,6 +34,7 @@ public class Query<T> {
     private final Map<String, Object> params = new LinkedHashMap<String, Object>();
     private Integer maxResults;
     private Integer firstResult;
+    private org.hibernate.transform.ResultTransformer resultTransformer;
 
     /** Legacy constructor — defaults to H2 dialect. */
     public Query(Connection connection, String sql,
@@ -215,6 +216,11 @@ public class Query<T> {
         return this;
     }
 
+    public Query<T> setResultTransformer(org.hibernate.transform.ResultTransformer transformer) {
+        this.resultTransformer = transformer;
+        return this;
+    }
+
     public List<T> list() {
         return getResultList();
     }
@@ -232,23 +238,46 @@ public class Query<T> {
             ps = connection.prepareStatement(finalSql);
             bindParams(ps);
             rs = ps.executeQuery();
-            Session tempSession = new Session(connection, metadataMap,
-                    new LinkedHashMap<String, Class<?>>(), showSql);
-            while (rs.next()) {
-                if (isCount || isNativeCount) {
-                    results.add((T) rs.getObject(1));
-                } else if (resultType != null && entityMeta != null) {
-                    results.add(tempSession.mapResultSet(rs, resultType, entityMeta));
-                } else {
-                    int colCount = rs.getMetaData().getColumnCount();
-                    if (colCount == 1) {
+
+            // ResultTransformer path — reads aliases from metadata, bypasses entity mapping
+            if (resultTransformer != null) {
+                java.sql.ResultSetMetaData rsMeta = rs.getMetaData();
+                int colCount = rsMeta.getColumnCount();
+                String[] aliases = new String[colCount];
+                for (int i = 1; i <= colCount; i++) {
+                    String label = rsMeta.getColumnLabel(i);   // AS alias takes precedence
+                    aliases[i - 1] = (label != null && !label.isEmpty())
+                            ? label : rsMeta.getColumnName(i);
+                }
+                while (rs.next()) {
+                    Object[] tuple = new Object[colCount];
+                    for (int i = 1; i <= colCount; i++) {
+                        tuple[i - 1] = rs.getObject(i);
+                    }
+                    results.add((T) resultTransformer.transformTuple(tuple, aliases));
+                }
+                results = (List<T>) resultTransformer.transformList(results);
+            } else {
+                // tempSession shares this Query's connection — must NOT close it here
+                @SuppressWarnings("resource")
+                Session tempSession = new Session(connection, metadataMap,
+                        new LinkedHashMap<String, Class<?>>(), showSql);
+                while (rs.next()) {
+                    if (isCount || isNativeCount) {
                         results.add((T) rs.getObject(1));
+                    } else if (resultType != null && entityMeta != null) {
+                        results.add(tempSession.mapResultSet(rs, resultType, entityMeta));
                     } else {
-                        Object[] row = new Object[colCount];
-                        for (int col = 1; col <= colCount; col++) {
-                            row[col - 1] = rs.getObject(col);
+                        int colCount = rs.getMetaData().getColumnCount();
+                        if (colCount == 1) {
+                            results.add((T) rs.getObject(1));
+                        } else {
+                            Object[] row = new Object[colCount];
+                            for (int col = 1; col <= colCount; col++) {
+                                row[col - 1] = rs.getObject(col);
+                            }
+                            results.add((T) row);
                         }
-                        results.add((T) row);
                     }
                 }
             }
