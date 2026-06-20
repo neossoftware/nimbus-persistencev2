@@ -414,6 +414,77 @@ private Segment segment;
 private List<Order> orders;
 ```
 
+### `@OneToOne` bidireccional
+
+```java
+// Entidad A — lado owner (tiene la FK)
+@Entity
+@Table(name = "TC_USER")
+public class User {
+
+    @Id
+    @Column(name = "ID_USER")
+    private Long id;
+
+    @OneToOne
+    @JoinColumn(name = "ID_PROFILE")
+    private UserProfile profile;      // owner: FK ID_PROFILE en TC_USER
+}
+
+// Entidad B — lado inverse (no tiene FK)
+@Entity
+@Table(name = "TC_USER_PROFILE")
+public class UserProfile {
+
+    @Id
+    @Column(name = "ID_PROFILE")
+    private Long id;
+
+    @OneToOne(mappedBy = "profile")
+    private User user;                // inverse: carga vía SELECT WHERE ID_PROFILE = ?
+}
+```
+
+Al hacer `get(UserProfile.class, id)`, Nimbus ejecuta automáticamente
+`SELECT * FROM TC_USER WHERE ID_PROFILE = ?` para poblar el campo `user`.
+
+### `@ManyToMany` con anotaciones
+
+```java
+@Entity
+@Table(name = "TC_ROLE")
+public class Role {
+
+    @Id
+    @Column(name = "ID_ROLE")
+    private Long id;
+
+    @ManyToMany(mappedBy = "roles")   // inverse — owner es User
+    private List<User> users;
+}
+
+@Entity
+@Table(name = "TC_USER")
+public class User {
+
+    @Id
+    @Column(name = "ID_USER")
+    private Long id;
+
+    @ManyToMany
+    @JoinTable(
+        name = "TC_USER_ROLE",
+        joinColumns        = @JoinColumn(name = "ID_USER"),
+        inverseJoinColumns = @JoinColumn(name = "ID_ROLE")
+    )
+    private List<Role> roles;         // owner: tiene @JoinTable
+}
+```
+
+El `save()` del owner inserta filas en `TC_USER_ROLE` automáticamente.
+El `get()` con `FetchType.EAGER` (default) ejecuta un JOIN para cargar la colección.
+Para colecciones grandes usar `FetchType.LAZY` y cargar bajo demanda.
+
 ### Shared PK/FK (PK = FK)
 
 Cuando la FK es la misma columna que la PK de la entidad hija:
@@ -653,7 +724,6 @@ adaptado a WAS; Nimbus fue construido para ese contexto desde el inicio.
 ## Limitaciones conocidas
 
 - `COUNT(alias)` en HQL no resuelve el alias → usar `COUNT(*)`.
-- No soporta `@OneToOne` bidireccional ni `@ManyToMany` con anotaciones (solo HBM XML).
 - Sin pool de conexiones propio — usar el pool del servidor (WAS) o añadir HikariCP/c3p0 como `DataSource`.
 - `hbm2ddl.auto` genera DDL en sintaxis H2/PostgreSQL; no apto para DB2 en producción (usar `none`).
 - HQL no soporta subconsultas ni funciones de agregación complejas (`GROUP BY`, `HAVING`).

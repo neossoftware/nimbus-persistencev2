@@ -83,6 +83,10 @@ public class EntityMetadata {
                 relations.add(RelationMetadata.oneToOne(field));
                 continue;
             }
+            if (field.isAnnotationPresent(javax.persistence.ManyToMany.class)) {
+                relations.add(RelationMetadata.manyToMany(field));
+                continue;
+            }
             if (Collection.class.isAssignableFrom(field.getType())) {
                 continue;
             }

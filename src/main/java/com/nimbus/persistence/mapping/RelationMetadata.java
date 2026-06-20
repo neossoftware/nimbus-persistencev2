@@ -83,6 +83,34 @@ public class RelationMetadata {
                 true, null, null, null);
     }
 
+    public static RelationMetadata manyToMany(Field field) {
+        javax.persistence.ManyToMany mtm = field.getAnnotation(javax.persistence.ManyToMany.class);
+        FetchType fetchType = FetchType.LAZY;
+        String mappedBy = "";
+        if (mtm != null) {
+            fetchType = mtm.fetch() == javax.persistence.FetchType.EAGER
+                    ? FetchType.EAGER : FetchType.LAZY;
+            mappedBy = mtm.mappedBy();
+        }
+        if (!mappedBy.isEmpty()) {
+            // inverse side — join table info is on the owner; no columns here
+            return new RelationMetadata(field, Type.MANY_TO_MANY, null, mappedBy, fetchType,
+                    true, null, null, null);
+        }
+        // owner side — read @JoinTable for join table + both FK columns
+        javax.persistence.JoinTable jt = field.getAnnotation(javax.persistence.JoinTable.class);
+        String joinTable = null;
+        String keyColumn = null;
+        String inverseJoinColumn = null;
+        if (jt != null) {
+            joinTable = jt.name().isEmpty() ? null : jt.name();
+            if (jt.joinColumns().length > 0) keyColumn = jt.joinColumns()[0].name();
+            if (jt.inverseJoinColumns().length > 0) inverseJoinColumn = jt.inverseJoinColumns()[0].name();
+        }
+        return new RelationMetadata(field, Type.MANY_TO_MANY, null, "", fetchType,
+                true, joinTable, keyColumn, inverseJoinColumn);
+    }
+
     public static RelationMetadata oneToOne(Field field) {
         FetchType fetchType = FetchType.EAGER;
         String mappedBy = "";

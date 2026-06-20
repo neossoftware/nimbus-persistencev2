@@ -511,6 +511,15 @@ public class Session implements AutoCloseable {
                 }
             }
 
+            // @OneToOne inverse side (mappedBy): SELECT related WHERE fk = thisPk
+            for (RelationMetadata rel : meta.getRelations()) {
+                if (rel.getType() == RelationMetadata.Type.ONE_TO_ONE
+                        && !rel.isOwnerSide()
+                        && rel.getFetchType() == FetchType.EAGER && pkVal != null) {
+                    loadOneToOneInverse(obj, pkVal, rel);
+                }
+            }
+
             // @OneToMany EAGER: secondary SELECT per collection
             for (RelationMetadata rel : meta.getRelations()) {
                 if (rel.getType() == RelationMetadata.Type.ONE_TO_MANY
@@ -584,6 +593,48 @@ public class Session implements AutoCloseable {
         } catch (Exception e) {
             throw new com.nimbus.persistence.exception.NimbusPersistenceException(
                     "Failed to load @OneToMany collection: " + rel.getField().getName(), e);
+        }
+    }
+
+    /**
+     * Loads the inverse side of a @OneToOne bidirectional relation.
+     * The FK lives in the related table, not in this entity's table.
+     * Pattern: SELECT * FROM related_table WHERE fk_col = thisPk LIMIT 1
+     */
+    private void loadOneToOneInverse(Object owner, Object ownerPk, RelationMetadata rel) {
+        try {
+            Class<?> relatedClass = rel.getField().getType();
+            EntityMetadata relatedMeta = metadataMap.get(relatedClass);
+            if (relatedMeta == null) return;
+
+            // Resolve FK column from mappedBy: find the owning field in the related entity
+            String fkColumn = null;
+            String mappedBy = rel.getMappedBy();
+            for (RelationMetadata relRel : relatedMeta.getRelations()) {
+                if (relRel.getField().getName().equals(mappedBy)) {
+                    fkColumn = relRel.getJoinColumnName();
+                    break;
+                }
+            }
+            if (fkColumn == null) return;
+
+            String sql = "SELECT * FROM " + relatedMeta.getTableName()
+                    + " WHERE " + fkColumn + " = ?";
+            if (showSql) System.out.println("Hibernate: " + sql);
+
+            PreparedStatement ps = connection.prepareStatement(sql);
+            ps.setObject(1, ownerPk);
+            ResultSet rs2 = ps.executeQuery();
+            if (rs2.next()) {
+                Object related = mapResultSet(rs2, relatedClass, relatedMeta, true);
+                rel.getField().setAccessible(true);
+                rel.getField().set(owner, related);
+            }
+            rs2.close();
+            ps.close();
+        } catch (Exception e) {
+            throw new com.nimbus.persistence.exception.NimbusPersistenceException(
+                    "Failed to load @OneToOne inverse: " + rel.getField().getName(), e);
         }
     }
 
