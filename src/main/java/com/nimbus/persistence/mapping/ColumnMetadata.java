@@ -32,13 +32,15 @@ public class ColumnMetadata {
     private final javax.persistence.EnumType enumeratedType;  // null = not an enum column
     private final javax.persistence.TemporalType temporalType; // null = use field Java type
     private final boolean lob;
+    // @org.hibernate.annotations.Type — custom type name (yes_no, true_false, text, clob, ...)
+    private final String hibernateType;
 
     private ColumnMetadata(Field field, String columnName, boolean nullable, int length,
                            boolean pk, GenerationType generationType, boolean unique,
                            int precision, int scale, String columnDefinition,
                            javax.persistence.EnumType enumeratedType,
                            javax.persistence.TemporalType temporalType,
-                           boolean lob) {
+                           boolean lob, String hibernateType) {
         this.field = field;
         this.columnName = columnName;
         this.nullable = nullable;
@@ -52,6 +54,7 @@ public class ColumnMetadata {
         this.enumeratedType = enumeratedType;
         this.temporalType = temporalType;
         this.lob = lob;
+        this.hibernateType = hibernateType != null ? hibernateType.toLowerCase().trim() : null;
     }
 
     /**
@@ -62,7 +65,7 @@ public class ColumnMetadata {
     public static ColumnMetadata ofHbm(Field field, String columnName,
                                         boolean isPk, GenerationType generationType) {
         return new ColumnMetadata(field, columnName, true, 255, isPk, generationType,
-                false, 0, 0, "", null, null, false);
+                false, 0, 0, "", null, null, false, null);
     }
 
     public static ColumnMetadata of(Field field) {
@@ -125,8 +128,15 @@ public class ColumnMetadata {
         // @Lob
         boolean isLob = field.isAnnotationPresent(javax.persistence.Lob.class);
 
+        // @org.hibernate.annotations.Type — custom type mapping (yes_no, true_false, text, clob, ...)
+        String hibernateType = null;
+        if (field.isAnnotationPresent(org.hibernate.annotations.Type.class)) {
+            hibernateType = field.getAnnotation(org.hibernate.annotations.Type.class).type();
+        }
+
         return new ColumnMetadata(field, colName, nullable, length, isPk, genType, unique,
-                precision, scale, columnDefinition, enumeratedType, temporalType, isLob);
+                precision, scale, columnDefinition, enumeratedType, temporalType, isLob,
+                hibernateType);
     }
 
     private static GenerationType mapJpaGenerationType(javax.persistence.GenerationType jpa) {
@@ -153,6 +163,30 @@ public class ColumnMetadata {
     public javax.persistence.EnumType getEnumeratedType() { return enumeratedType; }
     public javax.persistence.TemporalType getTemporalType() { return temporalType; }
     public boolean isLob() { return lob; }
+    public String getHibernateType() { return hibernateType; }
+
+    // yes_no / YesNoType / true_false / TrueFalseType / numeric_boolean
+    public boolean isYesNo() {
+        return "yes_no".equals(hibernateType)
+                || "org.hibernate.type.yesnotype".equals(hibernateType);
+    }
+    public boolean isTrueFalse() {
+        return "true_false".equals(hibernateType)
+                || "org.hibernate.type.truefalsetype".equals(hibernateType);
+    }
+    public boolean isNumericBoolean() {
+        return "numeric_boolean".equals(hibernateType)
+                || "org.hibernate.type.numericbooleantype".equals(hibernateType);
+    }
+    public boolean isClobType() {
+        return "text".equals(hibernateType) || "clob".equals(hibernateType)
+                || "org.hibernate.type.stringclobtype".equals(hibernateType)
+                || "org.hibernate.type.texttype".equals(hibernateType);
+    }
+    public boolean isBlobType() {
+        return "blob".equals(hibernateType)
+                || "org.hibernate.type.blobtype".equals(hibernateType);
+    }
 
     public boolean isGeneratedIdentity() {
         return generationType == GenerationType.IDENTITY
@@ -171,9 +205,23 @@ public class ColumnMetadata {
             ReflectionUtils.setFieldValue(field, entity, null);
             return;
         }
-        Object converted = field.getType().isEnum()
-                ? convertEnum(value, field.getType())
-                : ReflectionUtils.convertToJavaType(value, field.getType());
+        Object converted;
+        if (isYesNo()) {
+            // DB stores 'Y'/'N' — convert to boolean
+            String s = value.toString().trim().toUpperCase();
+            converted = "Y".equals(s);
+        } else if (isTrueFalse()) {
+            // DB stores 'T'/'F' — convert to boolean
+            String s = value.toString().trim().toUpperCase();
+            converted = "T".equals(s);
+        } else if (isNumericBoolean()) {
+            // DB stores 1/0 — convert to boolean
+            converted = ((Number) value).intValue() != 0;
+        } else if (field.getType().isEnum()) {
+            converted = convertEnum(value, field.getType());
+        } else {
+            converted = ReflectionUtils.convertToJavaType(value, field.getType());
+        }
         ReflectionUtils.setFieldValue(field, entity, converted);
     }
 
@@ -208,6 +256,38 @@ public class ColumnMetadata {
     public void bindValue(PreparedStatement ps, int idx, Object value) throws SQLException {
         if (value == null) {
             ps.setNull(idx, Types.NULL);
+            return;
+        }
+
+        // @Type(type="yes_no") — boolean → 'Y'/'N'
+        if (isYesNo()) {
+            boolean b = (value instanceof Boolean)
+                    ? (Boolean) value : Boolean.parseBoolean(value.toString());
+            ps.setString(idx, b ? "Y" : "N");
+            return;
+        }
+        // @Type(type="true_false") — boolean → 'T'/'F'
+        if (isTrueFalse()) {
+            boolean b = (value instanceof Boolean)
+                    ? (Boolean) value : Boolean.parseBoolean(value.toString());
+            ps.setString(idx, b ? "T" : "F");
+            return;
+        }
+        // @Type(type="numeric_boolean") — boolean → 1/0
+        if (isNumericBoolean()) {
+            boolean b = (value instanceof Boolean)
+                    ? (Boolean) value : Boolean.parseBoolean(value.toString());
+            ps.setInt(idx, b ? 1 : 0);
+            return;
+        }
+        // @Type(type="text"|"clob") — String → CLOB
+        if (isClobType() && value instanceof String) {
+            ps.setString(idx, (String) value);
+            return;
+        }
+        // @Type(type="blob") — byte[] → BLOB
+        if (isBlobType() && value instanceof byte[]) {
+            ps.setBytes(idx, (byte[]) value);
             return;
         }
 

@@ -212,6 +212,12 @@ public class SchemaExport {
     private String getSqlType(ColumnMetadata col) {
         Class<?> type = col.getField().getType();
 
+        // @Type overrides everything else
+        if (col.isYesNo() || col.isTrueFalse()) return "CHAR(1)";
+        if (col.isNumericBoolean())              return "SMALLINT";
+        if (col.isClobType())                    return "CLOB";
+        if (col.isBlobType())                    return "BLOB";
+
         // @Lob overrides normal type mapping
         if (col.isLob()) {
             if (type == String.class || type == char[].class || type == Character[].class) {
