@@ -187,6 +187,18 @@ public class ColumnMetadata {
         return "blob".equals(hibernateType)
                 || "org.hibernate.type.blobtype".equals(hibernateType);
     }
+    public boolean isDateType() {
+        return "date".equals(hibernateType)
+                || "org.hibernate.type.datetype".equals(hibernateType);
+    }
+    public boolean isTimestampType() {
+        return "timestamp".equals(hibernateType)
+                || "org.hibernate.type.timestamptype".equals(hibernateType);
+    }
+    public boolean isTimeType() {
+        return "time".equals(hibernateType)
+                || "org.hibernate.type.timetype".equals(hibernateType);
+    }
 
     public boolean isGeneratedIdentity() {
         return generationType == GenerationType.IDENTITY
@@ -217,6 +229,18 @@ public class ColumnMetadata {
         } else if (isNumericBoolean()) {
             // DB stores 1/0 — convert to boolean
             converted = ((Number) value).intValue() != 0;
+        } else if (isDateType()) {
+            converted = (value instanceof java.util.Date)
+                    ? new java.sql.Date(((java.util.Date) value).getTime())
+                    : value;
+        } else if (isTimestampType()) {
+            converted = (value instanceof java.util.Date)
+                    ? new Timestamp(((java.util.Date) value).getTime())
+                    : value;
+        } else if (isTimeType()) {
+            converted = (value instanceof java.util.Date)
+                    ? new java.sql.Time(((java.util.Date) value).getTime())
+                    : value;
         } else if (field.getType().isEnum()) {
             converted = convertEnum(value, field.getType());
         } else {
@@ -280,6 +304,23 @@ public class ColumnMetadata {
             ps.setInt(idx, b ? 1 : 0);
             return;
         }
+        // @Type(type="date"|"timestamp"|"time") — java.util.Date → JDBC Date/Timestamp/Time
+        if (isDateType()) {
+            java.util.Date d = (java.util.Date) value;
+            ps.setDate(idx, new java.sql.Date(d.getTime()));
+            return;
+        }
+        if (isTimestampType()) {
+            java.util.Date d = (java.util.Date) value;
+            ps.setTimestamp(idx, new Timestamp(d.getTime()));
+            return;
+        }
+        if (isTimeType()) {
+            java.util.Date d = (java.util.Date) value;
+            ps.setTime(idx, new java.sql.Time(d.getTime()));
+            return;
+        }
+
         // @Type(type="text"|"clob") — String → CLOB
         if (isClobType() && value instanceof String) {
             ps.setString(idx, (String) value);

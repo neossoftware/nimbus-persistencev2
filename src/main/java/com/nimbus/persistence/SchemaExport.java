@@ -217,6 +217,9 @@ public class SchemaExport {
         if (col.isNumericBoolean())              return "SMALLINT";
         if (col.isClobType())                    return "CLOB";
         if (col.isBlobType())                    return "BLOB";
+        if (col.isDateType())                    return "DATE";
+        if (col.isTimestampType())               return "TIMESTAMP";
+        if (col.isTimeType())                    return "TIME";
 
         // @Lob overrides normal type mapping
         if (col.isLob()) {
