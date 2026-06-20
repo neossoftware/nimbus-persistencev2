@@ -12,11 +12,14 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 
 public class Query<T> {
 
@@ -32,6 +35,7 @@ public class Query<T> {
     private final boolean isNativeCount;
 
     private final Map<String, Object> params = new LinkedHashMap<String, Object>();
+    private final Map<String, List<Object>> listParams = new LinkedHashMap<String, List<Object>>();
     private Integer maxResults;
     private Integer firstResult;
     private org.hibernate.transform.ResultTransformer resultTransformer;
@@ -221,6 +225,29 @@ public class Query<T> {
         return this;
     }
 
+    /**
+     * Hibernate 5: setParameterList — expande IN (:param) con una colección de valores.
+     * FROM Entity WHERE field IN (:list) con list=["A","B","C"]
+     * genera: WHERE field IN (?, ?, ?)
+     */
+    public Query<T> setParameterList(String name, Collection<?> values) {
+        List<Object> list = new ArrayList<Object>();
+        if (values != null) {
+            for (Object v : values) list.add(v);
+        }
+        listParams.put(name, list);
+        return this;
+    }
+
+    public Query<T> setParameterList(String name, Object[] values) {
+        List<Object> list = new ArrayList<Object>();
+        if (values != null) {
+            for (Object v : values) list.add(v);
+        }
+        listParams.put(name, list);
+        return this;
+    }
+
     public List<T> list() {
         return getResultList();
     }
@@ -331,39 +358,109 @@ public class Query<T> {
     }
 
     private String buildFinalSql() {
-        String s = sql;
-        if (maxResults != null) {
-            s = dialect.applyLimit(s, maxResults);
-        }
-        if (firstResult != null) {
-            s = s + " OFFSET " + firstResult;
-        }
+        String s = listParams.isEmpty() ? sql : expandListParams(sql);
+        if (maxResults != null) s = dialect.applyLimit(s, maxResults);
+        if (firstResult != null) s = s + " OFFSET " + firstResult;
         return s;
     }
 
+    /**
+     * Expands each list-param's single ? into N ?s (one per value).
+     * E.g. "WHERE x IN (?)" with list=["A","B","C"] → "WHERE x IN (?,?,?)"
+     */
+    private String expandListParams(String rawSql) {
+        // positions that need expansion: originalPosition → expandedSize
+        Map<Integer, Integer> expansions = new TreeMap<Integer, Integer>();
+        for (Map.Entry<String, List<Object>> entry : listParams.entrySet()) {
+            List<Integer> positions = paramPositions.get(entry.getKey());
+            if (positions != null) {
+                for (int pos : positions) {
+                    expansions.put(pos, entry.getValue().size());
+                }
+            }
+        }
+        if (expansions.isEmpty()) return rawSql;
+
+        StringBuilder result = new StringBuilder();
+        int qIdx = 0; // 1-based ? counter
+        for (int i = 0; i < rawSql.length(); i++) {
+            char c = rawSql.charAt(i);
+            if (c == '?') {
+                qIdx++;
+                Integer expandTo = expansions.get(qIdx);
+                if (expandTo != null && expandTo > 1) {
+                    for (int j = 0; j < expandTo; j++) {
+                        if (j > 0) result.append(", ");
+                        result.append('?');
+                    }
+                } else {
+                    result.append('?');
+                }
+            } else {
+                result.append(c);
+            }
+        }
+        return result.toString();
+    }
+
     private void bindParams(PreparedStatement ps) throws SQLException {
+        if (!listParams.isEmpty()) {
+            bindParamsWithExpansion(ps);
+            return;
+        }
         for (Map.Entry<String, Object> entry : params.entrySet()) {
             String key = entry.getKey();
             Object value = entry.getValue();
-
-            // Handle positional params (__pos_N)
             if (key.startsWith("__pos_")) {
                 int pos = Integer.parseInt(key.substring(6));
                 ps.setObject(pos, value);
                 continue;
             }
-
-            // Handle named params
             List<Integer> positions = paramPositions.get(key);
-            if (positions == null) {
-                continue;
-            }
+            if (positions == null) continue;
             for (int pos : positions) {
-                if (value == null) {
-                    ps.setNull(pos, java.sql.Types.NULL);
-                } else {
-                    ps.setObject(pos, value);
+                if (value == null) ps.setNull(pos, java.sql.Types.NULL);
+                else ps.setObject(pos, value);
+            }
+        }
+    }
+
+    /**
+     * Binds all params in original-position order, accounting for list-param expansion.
+     * Regular params occupy 1 slot each; list params occupy N slots (one per value).
+     */
+    private void bindParamsWithExpansion(PreparedStatement ps) throws SQLException {
+        // Collect original-position → values (single item or list)
+        TreeMap<Integer, List<Object>> ordered = new TreeMap<Integer, List<Object>>();
+
+        for (Map.Entry<String, Object> entry : params.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            if (key.startsWith("__pos_")) {
+                int pos = Integer.parseInt(key.substring(6));
+                ordered.put(pos, Collections.singletonList(value));
+            } else {
+                List<Integer> positions = paramPositions.get(key);
+                if (positions == null) continue;
+                for (int pos : positions) {
+                    ordered.put(pos, Collections.singletonList(value));
                 }
+            }
+        }
+        for (Map.Entry<String, List<Object>> entry : listParams.entrySet()) {
+            List<Integer> positions = paramPositions.get(entry.getKey());
+            if (positions == null) continue;
+            for (int pos : positions) {
+                ordered.put(pos, entry.getValue());
+            }
+        }
+
+        int actualPos = 1;
+        for (List<Object> values : ordered.values()) {
+            for (Object value : values) {
+                if (value == null) ps.setNull(actualPos, java.sql.Types.NULL);
+                else ps.setObject(actualPos, value);
+                actualPos++;
             }
         }
     }

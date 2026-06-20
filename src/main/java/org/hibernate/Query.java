@@ -9,6 +9,8 @@ import java.util.Map;
 
 /**
  * Hibernate 5 compatibility alias for com.nimbus.persistence.Query.
+ * list() returns raw List (no generic) to match Hibernate 5 API — callers use
+ * @SuppressWarnings("unchecked") when assigning to List<EntityType>, same as before.
  */
 @SuppressWarnings({"unchecked", "rawtypes"})
 public class Query extends com.nimbus.persistence.Query<Object> {
@@ -22,5 +24,20 @@ public class Query extends com.nimbus.persistence.Query<Object> {
         super(connection, sql, paramPositions,
                 (Class<Object>) resultType,
                 entityMeta, metadataMap, showSql, dialect, isCount, isNativeCount);
+    }
+
+    /**
+     * Hibernate 5 returned raw List — override to restore that behavior so existing
+     * code with @SuppressWarnings("unchecked") List<MyEntity> x = query.list()
+     * compiles without error.
+     */
+    @Override
+    public List list() {
+        return super.list();
+    }
+
+    @Override
+    public List getResultList() {
+        return super.getResultList();
     }
 }
