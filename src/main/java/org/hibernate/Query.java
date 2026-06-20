@@ -40,4 +40,64 @@ public class Query extends com.nimbus.persistence.Query<Object> {
     public List getResultList() {
         return super.getResultList();
     }
+
+    // ── Hibernate 5 chaining — return org.hibernate.Query for fluent API ──────
+
+    @Override
+    public Query setParameter(String name, Object value) {
+        return (Query) super.setParameter(name, value);
+    }
+
+    @Override
+    public Query setString(String name, String value) {
+        return (Query) super.setString(name, value);
+    }
+
+    @Override
+    public Query setInteger(String name, Integer value) {
+        return (Query) super.setInteger(name, value);
+    }
+
+    @Override
+    public Query setLong(String name, Long value) {
+        return (Query) super.setLong(name, value);
+    }
+
+    @Override
+    public Query setBoolean(String name, Boolean value) {
+        return (Query) super.setBoolean(name, value);
+    }
+
+    @Override
+    public Query setDate(String name, java.util.Date value) {
+        return (Query) super.setDate(name, value);
+    }
+
+    @Override
+    public Query setTimestamp(String name, java.util.Date value) {
+        return (Query) super.setTimestamp(name, value);
+    }
+
+    @Override
+    public Query setMaxResults(int max) {
+        return (Query) super.setMaxResults(max);
+    }
+
+    @Override
+    public Query setFirstResult(int first) {
+        return (Query) super.setFirstResult(first);
+    }
+
+    @Override
+    public Query setResultTransformer(org.hibernate.transform.ResultTransformer transformer) {
+        return (Query) super.setResultTransformer(transformer);
+    }
+
+    public Query setParameterList(String name, java.util.Collection<?> values) {
+        return (Query) super.setParameterList(name, values);
+    }
+
+    public Query setParameterList(String name, Object[] values) {
+        return (Query) super.setParameterList(name, values);
+    }
 }
