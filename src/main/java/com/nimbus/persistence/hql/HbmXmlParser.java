@@ -331,6 +331,18 @@ public final class HbmXmlParser {
             candidates.get(0).setAccessible(true);
             return candidates.get(0);
         }
+        // Multiple fields of same type (e.g. two Strings): disambiguate by name proximity.
+        // Pick the field whose name (case-insensitive) contains the property name or vice versa.
+        // e.g. name="tagCode"  → tagCodeL   contains "tagcode" ✓
+        //      name="label"    → labelStr   contains "label"   ✓
+        String lowerName = name.toLowerCase();
+        for (Field f : candidates) {
+            String lowerField = f.getName().toLowerCase();
+            if (lowerField.contains(lowerName) || lowerName.contains(lowerField)) {
+                f.setAccessible(true);
+                return f;
+            }
+        }
         return null; // ambiguous or not found — caller will throw
     }
 
