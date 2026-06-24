@@ -18,6 +18,9 @@ import java.util.Date;
 public class ColumnMetadata {
 
     private final Field field;
+    // Non-null when this column belongs to a composite-id embedded class (e.g. KeyRiskScoring).
+    // getValue/setValue/bind navigate: entity → embeddedKeyField.get(entity) → field.get(keyObj)
+    private final Field embeddedKeyField;
     private final String columnName;
     private final boolean nullable;
     private final int length;
@@ -35,13 +38,14 @@ public class ColumnMetadata {
     // @org.hibernate.annotations.Type — custom type name (yes_no, true_false, text, clob, ...)
     private final String hibernateType;
 
-    private ColumnMetadata(Field field, String columnName, boolean nullable, int length,
-                           boolean pk, GenerationType generationType, boolean unique,
+    private ColumnMetadata(Field field, Field embeddedKeyField, String columnName, boolean nullable,
+                           int length, boolean pk, GenerationType generationType, boolean unique,
                            int precision, int scale, String columnDefinition,
                            javax.persistence.EnumType enumeratedType,
                            javax.persistence.TemporalType temporalType,
                            boolean lob, String hibernateType) {
         this.field = field;
+        this.embeddedKeyField = embeddedKeyField;
         this.columnName = columnName;
         this.nullable = nullable;
         this.length = length;
@@ -64,7 +68,19 @@ public class ColumnMetadata {
      */
     public static ColumnMetadata ofHbm(Field field, String columnName,
                                         boolean isPk, GenerationType generationType) {
-        return new ColumnMetadata(field, columnName, true, 255, isPk, generationType,
+        return new ColumnMetadata(field, null, columnName, true, 255, isPk, generationType,
+                false, 0, 0, "", null, null, false, null);
+    }
+
+    /**
+     * Creates a PK column for a composite-id with an embedded key class.
+     * e.g. &lt;composite-id class="KeyRiskScoring" name="id"&gt; where:
+     *   embeddedKeyField = RiskScoring.id (holds the KeyRiskScoring object)
+     *   leafField        = KeyRiskScoring.idRisk (the actual PK value)
+     */
+    public static ColumnMetadata ofHbmComposite(Field embeddedKeyField, Field leafField,
+                                                  String columnName) {
+        return new ColumnMetadata(leafField, embeddedKeyField, columnName, true, 255, true, null,
                 false, 0, 0, "", null, null, false, null);
     }
 
@@ -134,7 +150,7 @@ public class ColumnMetadata {
             hibernateType = field.getAnnotation(org.hibernate.annotations.Type.class).type();
         }
 
-        return new ColumnMetadata(field, colName, nullable, length, isPk, genType, unique,
+        return new ColumnMetadata(field, null, colName, nullable, length, isPk, genType, unique,
                 precision, scale, columnDefinition, enumeratedType, temporalType, isLob,
                 hibernateType);
     }
@@ -151,6 +167,7 @@ public class ColumnMetadata {
     // ── Getters ───────────────────────────────────────────────────────────────
 
     public Field getField() { return field; }
+    public Field getEmbeddedKeyField() { return embeddedKeyField; }
     public String getColumnName() { return columnName; }
     public boolean isNullable() { return nullable; }
     public int getLength() { return length; }
@@ -209,25 +226,28 @@ public class ColumnMetadata {
     // ── Read / Write ──────────────────────────────────────────────────────────
 
     public Object getValue(Object entity) {
+        if (embeddedKeyField != null) {
+            Object keyObj = ReflectionUtils.getFieldValue(embeddedKeyField, entity);
+            if (keyObj == null) return null;
+            return ReflectionUtils.getFieldValue(field, keyObj);
+        }
         return ReflectionUtils.getFieldValue(field, entity);
     }
 
     public void setValue(Object entity, Object value) {
+        Object target = resolveTarget(entity);
         if (value == null) {
-            ReflectionUtils.setFieldValue(field, entity, null);
+            ReflectionUtils.setFieldValue(field, target, null);
             return;
         }
         Object converted;
         if (isYesNo()) {
-            // DB stores 'Y'/'N' — convert to boolean
             String s = value.toString().trim().toUpperCase();
             converted = "Y".equals(s);
         } else if (isTrueFalse()) {
-            // DB stores 'T'/'F' — convert to boolean
             String s = value.toString().trim().toUpperCase();
             converted = "T".equals(s);
         } else if (isNumericBoolean()) {
-            // DB stores 1/0 — convert to boolean
             converted = ((Number) value).intValue() != 0;
         } else if (isDateType()) {
             converted = (value instanceof java.util.Date)
@@ -246,7 +266,27 @@ public class ColumnMetadata {
         } else {
             converted = ReflectionUtils.convertToJavaType(value, field.getType());
         }
-        ReflectionUtils.setFieldValue(field, entity, converted);
+        ReflectionUtils.setFieldValue(field, target, converted);
+    }
+
+    /**
+     * When composite-id with embedded key class: get (or lazily create) the key object
+     * from the entity so that subsequent field reads/writes target the key class instance.
+     */
+    private Object resolveTarget(Object entity) {
+        if (embeddedKeyField == null) return entity;
+        embeddedKeyField.setAccessible(true);
+        try {
+            Object keyObj = embeddedKeyField.get(entity);
+            if (keyObj == null) {
+                keyObj = embeddedKeyField.getType().getDeclaredConstructor().newInstance();
+                embeddedKeyField.set(entity, keyObj);
+            }
+            return keyObj;
+        } catch (Exception e) {
+            throw new NimbusPersistenceException(
+                    "Cannot navigate composite key field '" + embeddedKeyField.getName() + "'", e);
+        }
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -267,10 +307,11 @@ public class ColumnMetadata {
     }
 
     public void bindToStatement(PreparedStatement ps, int idx, Object entity) throws SQLException {
+        Object target = resolveTarget(entity);
         field.setAccessible(true);
         Object value;
         try {
-            value = field.get(entity);
+            value = field.get(target);
         } catch (IllegalAccessException e) {
             throw new NimbusPersistenceException("Cannot read field: " + field.getName(), e);
         }

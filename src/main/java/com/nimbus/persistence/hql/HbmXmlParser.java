@@ -92,7 +92,7 @@ public final class HbmXmlParser {
             if ("id".equals(tag)) {
                 pkColumns.add(parseSimpleId(child, entityClass));
             } else if ("composite-id".equals(tag)) {
-                pkColumns.addAll(parseCompositeId(child, entityClass));
+                pkColumns.addAll(parseCompositeId(child, entityClass, cl, defaultPackage));
             } else if ("property".equals(tag)) {
                 columns.add(parseProperty(child, entityClass));
             } else if ("many-to-one".equals(tag)) {
@@ -127,18 +127,55 @@ public final class HbmXmlParser {
 
     // ── <composite-id> ───────────────────────────────────────────────────────
 
+    /**
+     * Parses &lt;composite-id&gt;. Two styles are supported:
+     * <ul>
+     *   <li>Embedded key class: {@code <composite-id class="KeyFoo" name="id">} —
+     *       key fields live in KeyFoo; {@code name} is the field in the entity that holds it.</li>
+     *   <li>Inline (no class attr): key fields live directly on the entity class.</li>
+     * </ul>
+     */
     private static List<ColumnMetadata> parseCompositeId(Element compositeElem,
-                                                           Class<?> entityClass) throws Exception {
+                                                           Class<?> entityClass,
+                                                           ClassLoader cl,
+                                                           String defaultPackage) throws Exception {
         List<ColumnMetadata> pks = new ArrayList<ColumnMetadata>();
+
+        String keyClassName = compositeElem.getAttribute("class");
+        String keyFieldName = compositeElem.getAttribute("name"); // field in entity holding the key
+
+        Class<?> keyClass = entityClass;
+        Field embeddedKeyField = null;
+
+        if (keyClassName != null && !keyClassName.isEmpty()) {
+            // Resolve unqualified name with the default package from <hibernate-mapping package="...">
+            if (!keyClassName.contains(".") && !defaultPackage.isEmpty()) {
+                keyClassName = defaultPackage + "." + keyClassName;
+            }
+            try {
+                keyClass = cl.loadClass(keyClassName);
+            } catch (ClassNotFoundException e) {
+                throw new NimbusPersistenceException(
+                        "HBM composite-id: cannot load key class " + keyClassName, e);
+            }
+            if (keyFieldName != null && !keyFieldName.isEmpty()) {
+                embeddedKeyField = findField(entityClass, keyFieldName);
+            }
+        }
+
         NodeList keyProps = compositeElem.getElementsByTagName("key-property");
         for (int i = 0; i < keyProps.getLength(); i++) {
             Element kp = (Element) keyProps.item(i);
             String fieldName  = kp.getAttribute("name");
             String columnName = kp.getAttribute("column");
             if (columnName.isEmpty()) columnName = ReflectionUtils.camelToSnake(fieldName);
-            Field field = findField(entityClass, fieldName);
-            // null generationType = ASSIGNED (user sets the value)
-            pks.add(ColumnMetadata.ofHbm(field, columnName, true, null));
+            Field leafField = findField(keyClass, fieldName);
+            if (embeddedKeyField != null) {
+                pks.add(ColumnMetadata.ofHbmComposite(embeddedKeyField, leafField, columnName));
+            } else {
+                // null generationType = ASSIGNED (user sets the value)
+                pks.add(ColumnMetadata.ofHbm(leafField, columnName, true, null));
+            }
         }
         return pks;
     }
