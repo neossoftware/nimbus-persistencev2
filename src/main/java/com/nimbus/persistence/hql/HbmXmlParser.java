@@ -17,6 +17,7 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.InputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -290,8 +291,47 @@ public final class HbmXmlParser {
             }
             current = current.getSuperclass();
         }
+        // Pass 3: setter-based lookup — Hibernate 5 uses property access (getter/setter) by
+        // default in HBM XML, so the field name may differ from the property name.
+        // e.g. field=bitacoraFolioTrackL with setter setBitacoraFolioTrack() matches name="bitacoraFolioTrack".
+        // Find setter setName() and return the unique field matching its parameter type.
+        Field bySetterType = findFieldBySetterType(clazz, name);
+        if (bySetterType != null) return bySetterType;
+
         throw new NimbusPersistenceException(
                 "HBM: field not found: " + clazz.getName() + "." + name);
+    }
+
+    /**
+     * Pass 3 of field resolution: find setter set+capitalize(name), then return the field
+     * whose type matches the setter's parameter — only when exactly one field of that type
+     * exists (avoids ambiguity for primitive/String fields that appear multiple times).
+     */
+    private static Field findFieldBySetterType(Class<?> clazz, String name) {
+        if (name == null || name.isEmpty()) return null;
+        String setterName = "set" + Character.toUpperCase(name.charAt(0)) + name.substring(1);
+        Class<?> paramType = null;
+        for (Method m : clazz.getMethods()) {
+            if (m.getName().equalsIgnoreCase(setterName) && m.getParameterCount() == 1) {
+                paramType = m.getParameterTypes()[0];
+                break;
+            }
+        }
+        if (paramType == null) return null;
+
+        List<Field> candidates = new ArrayList<Field>();
+        Class<?> current = clazz;
+        while (current != null && current != Object.class) {
+            for (Field f : current.getDeclaredFields()) {
+                if (f.getType().equals(paramType)) candidates.add(f);
+            }
+            current = current.getSuperclass();
+        }
+        if (candidates.size() == 1) {
+            candidates.get(0).setAccessible(true);
+            return candidates.get(0);
+        }
+        return null; // ambiguous or not found — caller will throw
     }
 
     private static GenerationType mapGeneratorClass(String genClass) {
