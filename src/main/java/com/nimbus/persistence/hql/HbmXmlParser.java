@@ -267,6 +267,7 @@ public final class HbmXmlParser {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static Field findField(Class<?> clazz, String name) {
+        // Pass 1: exact match (fast path)
         Class<?> current = clazz;
         while (current != null && current != Object.class) {
             try {
@@ -276,6 +277,18 @@ public final class HbmXmlParser {
             } catch (NoSuchFieldException e) {
                 current = current.getSuperclass();
             }
+        }
+        // Pass 2: case-insensitive — Hibernate 5 allows <property name="BusinessOccupation">
+        // to match a Java field named businessOccupation
+        current = clazz;
+        while (current != null && current != Object.class) {
+            for (Field f : current.getDeclaredFields()) {
+                if (f.getName().equalsIgnoreCase(name)) {
+                    f.setAccessible(true);
+                    return f;
+                }
+            }
+            current = current.getSuperclass();
         }
         throw new NimbusPersistenceException(
                 "HBM: field not found: " + clazz.getName() + "." + name);
