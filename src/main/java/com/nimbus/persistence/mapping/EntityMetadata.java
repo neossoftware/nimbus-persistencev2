@@ -199,10 +199,14 @@ public class EntityMetadata {
     }
 
     public EntityMetadata withSchemaPrefix(String schema) {
+        List<RelationMetadata> prefixedRelations = new ArrayList<RelationMetadata>();
+        for (RelationMetadata rel : relations) {
+            prefixedRelations.add(rel.withJoinTablePrefix(schema));
+        }
         return new EntityMetadata(entityClass, schema + "." + tableName,
                 new ArrayList<ColumnMetadata>(pkColumns),
                 new ArrayList<ColumnMetadata>(columns),
-                new ArrayList<RelationMetadata>(relations));
+                prefixedRelations);
     }
 
     public ColumnMetadata getColumnByFieldName(String fieldName) {

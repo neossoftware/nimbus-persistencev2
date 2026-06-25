@@ -188,6 +188,13 @@ public class RelationMetadata {
     public String getKeyColumn() { return keyColumn; }
     public String getInverseJoinColumn() { return inverseJoinColumn; }
 
+    /** Returns a copy of this relation with the join table name prefixed by schema. */
+    public RelationMetadata withJoinTablePrefix(String schema) {
+        if (joinTable == null || joinTable.contains(".")) return this;
+        return new RelationMetadata(field, type, joinColumnName, mappedBy, fetchType,
+                insertable, schema + "." + joinTable, keyColumn, inverseJoinColumn);
+    }
+
     /** Owner side = has FK column in its own table (no mappedBy). */
     public boolean isOwnerSide() {
         return mappedBy == null || mappedBy.isEmpty();
