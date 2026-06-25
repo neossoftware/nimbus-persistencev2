@@ -310,9 +310,11 @@ public final class HbmXmlParser {
     private static Field findFieldBySetterType(Class<?> clazz, String name) {
         if (name == null || name.isEmpty()) return null;
         String setterName = "set" + Character.toUpperCase(name.charAt(0)) + name.substring(1);
+        Method setter = null;
         Class<?> paramType = null;
         for (Method m : clazz.getMethods()) {
             if (m.getName().equalsIgnoreCase(setterName) && m.getParameterCount() == 1) {
+                setter = m;
                 paramType = m.getParameterTypes()[0];
                 break;
             }
@@ -331,10 +333,9 @@ public final class HbmXmlParser {
             candidates.get(0).setAccessible(true);
             return candidates.get(0);
         }
-        // Multiple fields of same type (e.g. two Strings): disambiguate by name proximity.
-        // Pick the field whose name (case-insensitive) contains the property name or vice versa.
-        // e.g. name="tagCode"  → tagCodeL   contains "tagcode" ✓
-        //      name="label"    → labelStr   contains "label"   ✓
+
+        // Step 1 — name proximity: field name contains property name or vice versa.
+        // e.g. name="tagCode" → tagCodeL  ("tagcodel" contains "tagcode") ✓
         String lowerName = name.toLowerCase();
         for (Field f : candidates) {
             String lowerField = f.getName().toLowerCase();
@@ -343,7 +344,38 @@ public final class HbmXmlParser {
                 return f;
             }
         }
+
+        // Step 2 — setter invocation probe: create a fresh instance, call setXxx(sentinel),
+        // then check which field holds the sentinel value.
+        // Handles cases where field name bears no relation to property name
+        // (e.g. field=pUserd, setter=setPassword).
+        // Safe: all HBM entities must have a public no-arg constructor.
+        try {
+            Object probe = clazz.getDeclaredConstructor().newInstance();
+            Object sentinel = probeValue(paramType);
+            if (sentinel != null) {
+                setter.invoke(probe, sentinel);
+                for (Field f : candidates) {
+                    f.setAccessible(true);
+                    if (sentinel.equals(f.get(probe))) {
+                        return f;
+                    }
+                }
+            }
+        } catch (Exception ignore) {}
+
         return null; // ambiguous or not found — caller will throw
+    }
+
+    /** Returns a distinctive sentinel value used to identify which field a setter writes to. */
+    private static Object probeValue(Class<?> type) {
+        if (type == String.class)                         return "__nimbus_probe__";
+        if (type == Integer.class || type == int.class)   return Integer.MIN_VALUE + 7;
+        if (type == Long.class    || type == long.class)  return Long.MIN_VALUE + 7L;
+        if (type == Double.class  || type == double.class) return -999999.007d;
+        if (type == Float.class   || type == float.class)  return -9999.07f;
+        if (type == Boolean.class || type == boolean.class) return Boolean.TRUE;
+        return null;
     }
 
     private static GenerationType mapGeneratorClass(String genClass) {
