@@ -108,6 +108,11 @@ public class Configuration {
                 String value = elem.getTextContent().trim();
                 if (!name.isEmpty()) {
                     properties.put(name, value);
+                    // Hibernate 5 normalizes short-form keys: connection.datasource →
+                    // hibernate.connection.datasource. Store both so either form works.
+                    if (!name.startsWith("hibernate.")) {
+                        properties.put("hibernate." + name, value);
+                    }
                 }
             }
 
